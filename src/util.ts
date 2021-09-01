@@ -76,7 +76,7 @@ export async function fetchVoiceChannelData(channel: VoiceChannel) {
 export async function fetchChannelMessages (channel: TextChannel | NewsChannel | ThreadChannel, options: CreateOptions): Promise<MessageData[]> {
     let messages: MessageData[] = [];
     const messageCount: number = isNaN(options.maxMessagesPerChannel) ? 10 : options.maxMessagesPerChannel;
-    const fetchOptions: ChannelLogsQueryOptions = { limit: 100 };
+    const fetchOptions: ChannelLogsQueryOptions = { limit: messageCount > 100 ? 100 : messageCount };
     let lastMessageId: Snowflake;
     let fetchComplete: boolean = false;
     while (!fetchComplete) {
@@ -254,7 +254,7 @@ export async function loadChannel(
                 bitrate = bitrates[Object.keys(MaxBitratePerTier).indexOf(guild.premiumTier) - 1];
             }
             createOptions.bitrate = bitrate;
-            createOptions.userLimit = (channelData as VoiceChannelData).userLimit;
+            createOptions.userLimit = (channelData as VoiceChannelData).userLimit > 99 ? null : (channelData as VoiceChannelData).userLimit;
             createOptions.type = 'GUILD_VOICE';
         }
         guild.channels.create(channelData.name, createOptions).then(async (channel) => {
@@ -312,9 +312,10 @@ export async function clearGuild(guild: Guild) {
     guild.channels.cache.forEach((channel) => {
         channel.delete().catch(() => {});
     });
-    guild.emojis.cache.forEach((emoji) => {
+    // Don't clear emojis!!
+    /*guild.emojis.cache.forEach((emoji) => {
         emoji.delete().catch(() => {});
-    });
+    });*/
     const webhooks = await guild.fetchWebhooks();
     webhooks.forEach((webhook) => {
         webhook.delete().catch(() => {});
