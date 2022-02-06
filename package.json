@@ -11,7 +11,7 @@
     "build": "tsc",
     "format": "prettier --write \"src/**/*.ts\"",
     "lint": "tslint -p tsconfig.json",
-    "install": "npx tsc"
+    "install": "yarn add typescript -D ; tsc"
   },
   "repository": {
     "type": "git",
