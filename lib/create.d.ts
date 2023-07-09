@@ -1,4 +1,4 @@
-import type { BanData, CreateOptions, EmojiData, RoleData } from './types';
+import type { BanData, ChannelsData, CreateOptions, EmojiData, RoleData } from './types';
 import type { Guild } from 'discord.js';
 /**
  * Returns an array with the banned members of the guild
@@ -25,4 +25,4 @@ export declare function getEmojis(guild: Guild, options: CreateOptions): Promise
  * @param {CreateOptions} options The backup options
  * @returns {ChannelData[]} The channels of the guild
  */
-export declare function getChannels(guild: Guild, options: CreateOptions): Promise<any>;
+export declare function getChannels(guild: Guild, options: CreateOptions): Promise<ChannelsData>;

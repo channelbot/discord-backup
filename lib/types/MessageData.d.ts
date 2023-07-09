@@ -1,9 +1,9 @@
-import { MessageEmbed, FileOptions } from 'discord.js';
+import { Embed, AttachmentPayload } from 'discord.js';
 export interface MessageData {
     username: string;
     avatar?: string;
     content?: string;
-    embeds?: MessageEmbed[];
-    files?: FileOptions[];
+    embeds?: Embed[];
+    files?: AttachmentPayload[];
     pinned?: boolean;
 }

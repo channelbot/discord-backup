@@ -1,6 +1,6 @@
 import type { BackupData, BackupInfos, CreateOptions, LoadOptions } from './types/';
 import type { Guild } from 'discord.js';
-import { SnowflakeUtil, Intents } from 'discord.js';
+import { SnowflakeUtil, IntentsBitField } from 'discord.js';
 
 import nodeFetch from 'node-fetch';
 import { sep } from 'path';
@@ -74,9 +74,8 @@ export const create = async (
     }
 ) => {
     return new Promise<BackupData>(async (resolve, reject) => {
-
-       const intents = new Intents(guild.client.options.intents);
-       if (!intents.has('GUILDS')) return reject('GUILDS intent is required');
+        const intents = guild.client.options.intents;
+        if (!intents.has(IntentsBitField.Flags.Guilds)) return reject('GUILDS intent is required');
 
         try {
             const backupData: BackupData = {
@@ -95,15 +94,15 @@ export const create = async (
                 emojis: [],
                 createdTimestamp: Date.now(),
                 guildID: guild.id,
-                id: options.backupID ?? SnowflakeUtil.generate(Date.now())
+                id: options.backupID ?? SnowflakeUtil.generate({ timestamp: Date.now() }).toString()
             };
             if (guild.iconURL()) {
                 if (options && options.saveImages && options.saveImages === 'base64') {
-                    backupData.iconBase64 = (
-                        await nodeFetch(guild.iconURL({ dynamic: true })).then((res) => res.buffer())
-                    ).toString('base64');
+                    backupData.iconBase64 = (await nodeFetch(guild.iconURL()).then((res) => res.buffer())).toString(
+                        'base64'
+                    );
                 }
-                backupData.iconURL = guild.iconURL({ dynamic: true });
+                backupData.iconURL = guild.iconURL();
             }
             if (guild.splashURL()) {
                 if (options && options.saveImages && options.saveImages === 'base64') {

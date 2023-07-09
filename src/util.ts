@@ -8,9 +8,9 @@ import type {
     ThreadChannelData,
     VoiceChannelData
 } from './types';
-import type {
+import {
     CategoryChannel,
-    ChannelLogsQueryOptions,
+    FetchMessagesOptions,
     Collection,
     Guild,
     GuildChannelCreateOptions,
@@ -20,19 +20,20 @@ import type {
     TextChannel,
     VoiceChannel,
     NewsChannel,
-    PremiumTier,
+    GuildPremiumTier,
     ThreadChannel,
-    GuildFeatures,
-    Webhook
+    GuildFeature,
+    Webhook,
+    GuildVerificationLevel
 } from 'discord.js';
-import { ChannelType } from 'discord.js';
+import { ChannelType, GuildDefaultMessageNotifications, GuildExplicitContentFilter, OverwriteType } from 'discord.js';
 import nodeFetch from 'node-fetch';
 
-const MaxBitratePerTier: Record<PremiumTier, number> = {
-    NONE: 64000,
-    TIER_1: 128000,
-    TIER_2: 256000,
-    TIER_3: 384000
+const MaxBitratePerTier: Record<GuildPremiumTier, number> = {
+    0: 64000,
+    1: 128000,
+    2: 256000,
+    3: 384000
 };
 
 /**
@@ -41,7 +42,7 @@ const MaxBitratePerTier: Record<PremiumTier, number> = {
 export function fetchChannelPermissions(channel: TextChannel | VoiceChannel | CategoryChannel | NewsChannel) {
     const permissions: ChannelPermissionsData[] = [];
     channel.permissionOverwrites.cache
-        .filter((p) => p.type === 'role')
+        .filter((p) => p.type === OverwriteType.Role)
         .forEach((perm) => {
             // For each overwrites permission
             const role = channel.guild.roles.cache.get(perm.id);
@@ -80,7 +81,7 @@ export async function fetchChannelMessages(
 ): Promise<MessageData[]> {
     let messages: MessageData[] = [];
     const messageCount: number = isNaN(options.maxMessagesPerChannel) ? 10 : options.maxMessagesPerChannel;
-    const fetchOptions: ChannelLogsQueryOptions = { limit: messageCount > 100 ? 100 : messageCount };
+    const fetchOptions: FetchMessagesOptions = { limit: messageCount > 100 ? 100 : messageCount };
     let lastMessageId: Snowflake;
     let fetchComplete: boolean = false;
     while (!fetchComplete) {
@@ -222,9 +223,7 @@ export async function loadChannel(
                 const webhook =
                     previousWebhook ||
                     (await (channel as TextChannel)
-                        .createWebhook('MessagesBackup', {
-                            avatar: channel.client.user.displayAvatarURL()
-                        })
+                        .createWebhook({ name: 'MessagesBackup', avatar: channel.client.user.displayAvatarURL() })
                         .catch(() => {}));
                 if (!webhook) return resolve();
                 messages = messages
@@ -252,6 +251,7 @@ export async function loadChannel(
         };
 
         const createOptions: GuildChannelCreateOptions = {
+            name: channelData.name,
             type: null,
             parent: category
         };
@@ -266,16 +266,16 @@ export async function loadChannel(
         } else if (channelData.type === ChannelType.GuildVoice) {
             // Downgrade bitrate
             let bitrate = (channelData as VoiceChannelData).bitrate;
-            const bitrates = Object.values(MaxBitratePerTier);
+            const bitrates = MaxBitratePerTier;
             while (bitrate > MaxBitratePerTier[guild.premiumTier]) {
-                bitrate = bitrates[Object.keys(MaxBitratePerTier).indexOf(guild.premiumTier) - 1];
+                bitrate = bitrates[guild.premiumTier];
             }
             createOptions.bitrate = bitrate;
             createOptions.userLimit =
                 (channelData as VoiceChannelData).userLimit > 99 ? null : (channelData as VoiceChannelData).userLimit;
             createOptions.type = ChannelType.GuildVoice;
         }
-        guild.channels.create(channelData.name, createOptions).then(async (channel) => {
+        guild.channels.create(createOptions).then(async (channel) => {
             /* Update channel permissions */
             const finalPermissions: OverwriteData[] = [];
             channelData.permissions.forEach((perm) => {
@@ -303,15 +303,9 @@ export async function loadChannel(
                     //&& guild.features.includes('THREADS_ENABLED')) {
                     await Promise.all(
                         (channelData as TextChannelData).threads.map(async (threadData) => {
-                            let autoArchiveDuration = threadData.autoArchiveDuration;
-                            if (!guild.features.includes('SEVEN_DAY_THREAD_ARCHIVE') && autoArchiveDuration === 10080)
-                                autoArchiveDuration = 4320;
-                            if (!guild.features.includes('THREE_DAY_THREAD_ARCHIVE') && autoArchiveDuration === 4320)
-                                autoArchiveDuration = 1440;
                             return (channel as TextChannel).threads
                                 .create({
-                                    name: threadData.name,
-                                    autoArchiveDuration
+                                    name: threadData.name
                                 })
                                 .then((thread) => {
                                     if (!webhook) return;
@@ -357,20 +351,20 @@ export async function clearGuild(guild: Guild) {
     guild.setIcon(null);
     guild.setBanner(null).catch(() => {});
     guild.setSplash(null).catch(() => {});
-    guild.setDefaultMessageNotifications('ONLY_MENTIONS');
+    guild.setDefaultMessageNotifications(GuildDefaultMessageNotifications.OnlyMentions);
     guild.setWidgetSettings({
         enabled: false,
         channel: null
     });
     if (!guild.features.includes('COMMUNITY')) {
-        guild.setExplicitContentFilter('DISABLED');
-        guild.setVerificationLevel('NONE');
+        guild.setExplicitContentFilter(GuildExplicitContentFilter.Disabled);
+        guild.setVerificationLevel(GuildVerificationLevel.None);
     }
     guild.setSystemChannel(null);
     guild.setSystemChannelFlags([
-        'SUPPRESS_GUILD_REMINDER_NOTIFICATIONS',
-        'SUPPRESS_JOIN_NOTIFICATIONS',
-        'SUPPRESS_PREMIUM_SUBSCRIPTIONS'
+        'SuppressGuildReminderNotifications',
+        'SuppressJoinNotifications',
+        'SuppressPremiumSubscriptions'
     ]);
     return;
 }

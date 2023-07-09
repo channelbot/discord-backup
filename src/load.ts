@@ -1,5 +1,16 @@
 import type { BackupData, LoadOptions } from './types';
-import type { Emoji, Guild, GuildChannel, Role, VoiceChannel } from 'discord.js';
+import {
+    ChannelType,
+    NewsChannel,
+    type Emoji,
+    type Guild,
+    type GuildChannel,
+    type Role,
+    type VoiceChannel,
+    TextChannel,
+    ForumChannel,
+    VoiceBasedChannel
+} from 'discord.js';
 import { loadCategory, loadChannel } from './util';
 
 /**
@@ -97,7 +108,13 @@ export const loadChannels = (guild: Guild, backupData: BackupData, options: Load
 export const loadAFK = (guild: Guild, backupData: BackupData): Promise<Guild[]> => {
     const afkPromises: Promise<Guild>[] = [];
     if (backupData.afk) {
-        afkPromises.push(guild.setAFKChannel(guild.channels.cache.find((ch) => ch.name === backupData.afk.name && ch.type === 'GUILD_VOICE') as VoiceChannel));
+        afkPromises.push(
+            guild.setAFKChannel(
+                guild.channels.cache.find(
+                    (ch) => ch.name === backupData.afk.name && ch.type === ChannelType.GuildVoice
+                ) as VoiceChannel
+            )
+        );
         afkPromises.push(guild.setAFKTimeout(backupData.afk.timeout));
     }
     return Promise.all(afkPromises);
@@ -110,9 +127,11 @@ export const loadEmojis = (guild: Guild, backupData: BackupData): Promise<Emoji[
     const emojiPromises: Promise<Emoji>[] = [];
     backupData.emojis.forEach((emoji) => {
         if (emoji.url) {
-            emojiPromises.push(guild.emojis.create(emoji.url, emoji.name));
+            emojiPromises.push(guild.emojis.create({ attachment: emoji.url, name: emoji.name }));
         } else if (emoji.base64) {
-            emojiPromises.push(guild.emojis.create(Buffer.from(emoji.base64, 'base64'), emoji.name));
+            emojiPromises.push(
+                guild.emojis.create({ attachment: Buffer.from(emoji.base64, 'base64'), name: emoji.name })
+            );
         }
     });
     return Promise.all(emojiPromises);
@@ -142,7 +161,11 @@ export const loadEmbedChannel = (guild: Guild, backupData: BackupData): Promise<
         embedChannelPromises.push(
             guild.setWidgetSettings({
                 enabled: backupData.widget.enabled,
-                channel: guild.channels.cache.find((ch) => ch.name === backupData.widget.channel)
+                channel: guild.channels.cache.find((ch) => ch.name === backupData.widget.channel) as
+                    | NewsChannel
+                    | TextChannel
+                    | ForumChannel
+                    | VoiceBasedChannel
             })
         );
     }

@@ -1,12 +1,12 @@
-import { DefaultMessageNotificationLevel, ExplicitContentFilterLevel, Snowflake, VerificationLevel } from 'discord.js';
+import { GuildDefaultMessageNotifications, GuildExplicitContentFilter, Snowflake, GuildVerificationLevel } from 'discord.js';
 import { AfkData, BanData, ChannelsData, EmojiData, RoleData, WidgetData } from './';
 export interface BackupData {
     name: string;
     iconURL?: string;
     iconBase64?: string;
-    verificationLevel: VerificationLevel;
-    explicitContentFilter: ExplicitContentFilterLevel;
-    defaultMessageNotifications: DefaultMessageNotificationLevel | number;
+    verificationLevel: GuildVerificationLevel;
+    explicitContentFilter: GuildExplicitContentFilter;
+    defaultMessageNotifications: GuildDefaultMessageNotifications | number;
     afk?: AfkData;
     widget: WidgetData;
     splashURL?: string;

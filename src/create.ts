@@ -99,10 +99,12 @@ export async function getChannels(guild: Guild, options: CreateOptions) {
             others: []
         };
         // Gets the list of the categories and sort them by position
-        const categories = (guild.channels.cache.filter((ch) => ch.type === ChannelType.GuildCategory) as Collection<
-            Snowflake,
-            CategoryChannel
-        >)
+        const categories = (
+            guild.channels.cache.filter((ch) => ch.type === ChannelType.GuildCategory) as Collection<
+                Snowflake,
+                CategoryChannel
+            >
+        )
             .sort((a, b) => a.position - b.position)
             .toJSON() as CategoryChannel[];
         for (const category of categories) {
@@ -112,10 +114,10 @@ export async function getChannels(guild: Guild, options: CreateOptions) {
                 children: [] // The children channels of the category
             };
             // Gets the children channels of the category and sort them by position
-            const children = category.children.sort((a, b) => a.position - b.position).toJSON();
+            const children = category.children.cache.sort((a, b) => a.position - b.position).toJSON();
             for (const child of children) {
                 // For each child channel
-                if (child.type === 'GUILD_TEXT' || child.type === 'GUILD_NEWS') {
+                if (child.type === ChannelType.GuildText || child.type === ChannelType.GuildAnnouncement) {
                     const channelData: TextChannelData = await fetchTextChannelData(child as TextChannel, options); // Gets the channel data
                     categoryData.children.push(channelData); // And then push the child in the categoryData
                 } else {
@@ -126,15 +128,17 @@ export async function getChannels(guild: Guild, options: CreateOptions) {
             channels.categories.push(categoryData); // Update channels object
         }
         // Gets the list of the other channels (that are not in a category) and sort them by position
-        const others = (guild.channels.cache.filter((ch) => {
-            return (
-                !ch.parent &&
-                ch.type !== ChannelType.GuildCategory &&
-                ch.type !== ChannelType.AnnouncementThread &&
-                ch.type !== ChannelType.PrivateThread &&
-                ch.type !== ChannelType.PublicThread
-            ); // threads will be saved with fetchTextChannelData
-        }) as Collection<Snowflake, Exclude<GuildChannel, ThreadChannel>>)
+        const others = (
+            guild.channels.cache.filter((ch) => {
+                return (
+                    !ch.parent &&
+                    ch.type !== ChannelType.GuildCategory &&
+                    ch.type !== ChannelType.AnnouncementThread &&
+                    ch.type !== ChannelType.PrivateThread &&
+                    ch.type !== ChannelType.PublicThread
+                ); // threads will be saved with fetchTextChannelData
+            }) as Collection<Snowflake, Exclude<GuildChannel, ThreadChannel>>
+        )
             .sort((a, b) => a.position - b.position)
             .toJSON();
         for (const channel of others) {
