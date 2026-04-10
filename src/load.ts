@@ -14,152 +14,154 @@ import {
 import { loadCategory, loadChannel } from './util';
 
 /**
- * Restores the guild configuration
+ * Restores the guild configuration.
+ *
+ * Sequential awaits — issuing all of these guild.set* PATCHes in parallel
+ * (the previous behaviour) hits the per-guild bucket immediately and the
+ * remaining ones 429.
  */
-export const loadConfig = (guild: Guild, backupData: BackupData): Promise<Guild[]> => {
-    const configPromises: Promise<Guild>[] = [];
+export const loadConfig = async (guild: Guild, backupData: BackupData): Promise<void> => {
     if (backupData.name) {
-        configPromises.push(guild.setName(backupData.name));
+        await guild.setName(backupData.name).catch(() => {});
     }
     if (backupData.iconBase64) {
-        configPromises.push(guild.setIcon(Buffer.from(backupData.iconBase64, 'base64')));
+        await guild.setIcon(Buffer.from(backupData.iconBase64, 'base64')).catch(() => {});
     } else if (backupData.iconURL) {
-        configPromises.push(guild.setIcon(backupData.iconURL));
+        await guild.setIcon(backupData.iconURL).catch(() => {});
     }
     if (backupData.splashBase64) {
-        configPromises.push(guild.setSplash(Buffer.from(backupData.splashBase64, 'base64')));
+        await guild.setSplash(Buffer.from(backupData.splashBase64, 'base64')).catch(() => {});
     } else if (backupData.splashURL) {
-        configPromises.push(guild.setSplash(backupData.splashURL));
+        await guild.setSplash(backupData.splashURL).catch(() => {});
     }
     if (backupData.bannerBase64) {
-        configPromises.push(guild.setBanner(Buffer.from(backupData.bannerBase64, 'base64')));
+        await guild.setBanner(Buffer.from(backupData.bannerBase64, 'base64')).catch(() => {});
     } else if (backupData.bannerURL) {
-        configPromises.push(guild.setBanner(backupData.bannerURL));
+        await guild.setBanner(backupData.bannerURL).catch(() => {});
     }
     if (backupData.verificationLevel) {
-        configPromises.push(guild.setVerificationLevel(backupData.verificationLevel));
+        await guild.setVerificationLevel(backupData.verificationLevel).catch(() => {});
     }
     if (backupData.defaultMessageNotifications) {
-        configPromises.push(guild.setDefaultMessageNotifications(backupData.defaultMessageNotifications));
+        await guild.setDefaultMessageNotifications(backupData.defaultMessageNotifications).catch(() => {});
     }
     const changeableExplicitLevel = guild.features.includes('COMMUNITY');
     if (backupData.explicitContentFilter && changeableExplicitLevel) {
-        configPromises.push(guild.setExplicitContentFilter(backupData.explicitContentFilter));
+        await guild.setExplicitContentFilter(backupData.explicitContentFilter).catch(() => {});
     }
-    return Promise.all(configPromises);
 };
 
 /**
- * Restore the guild roles
+ * Restore the guild roles.
+ *
+ * Discord's per-guild role-create bucket is small. Creating N roles in
+ * parallel just instantly trips the limit and the remaining N-bucket
+ * creations 429. Sequential is correct here.
  */
-export const loadRoles = (guild: Guild, backupData: BackupData): Promise<Role[]> => {
-    const rolePromises: Promise<Role>[] = [];
-    backupData.roles.forEach((roleData) => {
+export const loadRoles = async (guild: Guild, backupData: BackupData): Promise<void> => {
+    for (const roleData of backupData.roles) {
         if (roleData.isEveryone) {
-            rolePromises.push(
-                guild.roles.cache.get(guild.id).edit({
+            await guild.roles.cache
+                .get(guild.id)
+                ?.edit({
                     name: roleData.name,
                     color: roleData.color,
                     permissions: BigInt(roleData.permissions),
                     mentionable: roleData.mentionable
                 })
-            );
+                .catch(() => {});
         } else {
-            rolePromises.push(
-                guild.roles.create({
+            await guild.roles
+                .create({
                     name: roleData.name,
                     color: roleData.color,
                     hoist: roleData.hoist,
                     permissions: BigInt(roleData.permissions),
                     mentionable: roleData.mentionable
                 })
-            );
+                .catch(() => {});
         }
-    });
-    return Promise.all(rolePromises);
+    }
 };
 
 /**
- * Restore the guild channels
+ * Restore the guild channels.
+ *
+ * Sequential by category, sequential by child within each category. The
+ * old version Promise.all'd ALL categories simultaneously and the original
+ * `categoryData.children.forEach((c) => { loadChannel(c); resolve(true); })`
+ * loop both ignored the channel-create promise (so children were never
+ * awaited) and resolved the outer promise on the first child instead of
+ * the last, so on a guild with N categories of M children each it would
+ * fire roughly N*M create requests in one tick AND lie to the caller
+ * about being done.
  */
-export const loadChannels = (guild: Guild, backupData: BackupData, options: LoadOptions): Promise<unknown[]> => {
-    const loadChannelPromises: Promise<void | unknown>[] = [];
-    backupData.channels.categories.forEach((categoryData) => {
-        loadChannelPromises.push(
-            new Promise((resolve) => {
-                loadCategory(categoryData, guild).then((createdCategory) => {
-                    categoryData.children.forEach((channelData) => {
-                        loadChannel(channelData, guild, createdCategory, options);
-                        resolve(true);
-                    });
-                });
-            })
-        );
-    });
-    backupData.channels.others.forEach((channelData) => {
-        loadChannelPromises.push(loadChannel(channelData, guild, null, options));
-    });
-    return Promise.all(loadChannelPromises);
+export const loadChannels = async (guild: Guild, backupData: BackupData, options: LoadOptions): Promise<void> => {
+    for (const categoryData of backupData.channels.categories) {
+        const createdCategory = await loadCategory(categoryData, guild).catch(() => null);
+        if (!createdCategory) continue;
+        for (const channelData of categoryData.children) {
+            await loadChannel(channelData, guild, createdCategory, options).catch(() => {});
+        }
+    }
+    for (const channelData of backupData.channels.others) {
+        await loadChannel(channelData, guild, null, options).catch(() => {});
+    }
 };
 
 /**
  * Restore the afk configuration
  */
-export const loadAFK = (guild: Guild, backupData: BackupData): Promise<Guild[]> => {
-    const afkPromises: Promise<Guild>[] = [];
+export const loadAFK = async (guild: Guild, backupData: BackupData): Promise<void> => {
     if (backupData.afk) {
-        afkPromises.push(
-            guild.setAFKChannel(
+        await guild
+            .setAFKChannel(
                 guild.channels.cache.find(
                     (ch) => ch.name === backupData.afk.name && ch.type === ChannelType.GuildVoice
                 ) as VoiceChannel
             )
-        );
-        afkPromises.push(guild.setAFKTimeout(backupData.afk.timeout));
+            .catch(() => {});
+        await guild.setAFKTimeout(backupData.afk.timeout).catch(() => {});
     }
-    return Promise.all(afkPromises);
 };
 
 /**
- * Restore guild emojis
+ * Restore guild emojis. Sequential — emoji creates have their own bucket
+ * and parallelizing just trips it.
  */
-export const loadEmojis = (guild: Guild, backupData: BackupData): Promise<Emoji[]> => {
-    const emojiPromises: Promise<Emoji>[] = [];
-    backupData.emojis.forEach((emoji) => {
+export const loadEmojis = async (guild: Guild, backupData: BackupData): Promise<void> => {
+    for (const emoji of backupData.emojis) {
         if (emoji.url) {
-            emojiPromises.push(guild.emojis.create({ attachment: emoji.url, name: emoji.name }));
+            await guild.emojis.create({ attachment: emoji.url, name: emoji.name }).catch(() => {});
         } else if (emoji.base64) {
-            emojiPromises.push(
-                guild.emojis.create({ attachment: Buffer.from(emoji.base64, 'base64'), name: emoji.name })
-            );
+            await guild.emojis
+                .create({ attachment: Buffer.from(emoji.base64, 'base64'), name: emoji.name })
+                .catch(() => {});
         }
-    });
-    return Promise.all(emojiPromises);
+    }
 };
 
 /**
- * Restore guild bans
+ * Restore guild bans. Bulk-banning can't be done via REST in v10/v14, so
+ * we ban each user individually — but sequentially, not all at once.
  */
-export const loadBans = (guild: Guild, backupData: BackupData): Promise<string[]> => {
-    const banPromises: Promise<string>[] = [];
-    backupData.bans.forEach((ban) => {
-        banPromises.push(
-            guild.members.ban(ban.id, {
+export const loadBans = async (guild: Guild, backupData: BackupData): Promise<void> => {
+    for (const ban of backupData.bans) {
+        await guild.members
+            .ban(ban.id, {
                 reason: ban.reason
-            }) as Promise<string>
-        );
-    });
-    return Promise.all(banPromises);
+            })
+            .catch(() => {});
+    }
 };
 
 /**
  * Restore embedChannel configuration
  */
-export const loadEmbedChannel = (guild: Guild, backupData: BackupData): Promise<Guild[]> => {
-    const embedChannelPromises: Promise<Guild>[] = [];
+export const loadEmbedChannel = async (guild: Guild, backupData: BackupData): Promise<void> => {
     if (backupData.widget.channel) {
-        embedChannelPromises.push(
-            guild.setWidgetSettings({
+        await guild
+            .setWidgetSettings({
                 enabled: backupData.widget.enabled,
                 channel: guild.channels.cache.find((ch) => ch.name === backupData.widget.channel) as
                     | NewsChannel
@@ -167,7 +169,6 @@ export const loadEmbedChannel = (guild: Guild, backupData: BackupData): Promise<
                     | ForumChannel
                     | VoiceBasedChannel
             })
-        );
+            .catch(() => {});
     }
-    return Promise.all(embedChannelPromises);
 };
