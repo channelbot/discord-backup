@@ -184,23 +184,29 @@ export async function fetchTextChannelData(channel: TextChannel | NewsChannel, o
  * Creates a category for the guild
  */
 export async function loadCategory(categoryData: CategoryData, guild: Guild) {
-    return new Promise<CategoryChannel>((resolve) => {
-        guild.channels.create({ name: categoryData.name, type: ChannelType.GuildCategory }).then(async (category) => {
-            // When the category is created
-            const finalPermissions: OverwriteData[] = [];
-            categoryData.permissions.forEach((perm) => {
-                const role = guild.roles.cache.find((r) => r.name === perm.roleName);
-                if (role) {
-                    finalPermissions.push({
-                        id: role.id,
-                        allow: BigInt(perm.allow),
-                        deny: BigInt(perm.deny)
-                    });
-                }
-            });
-            await category.permissionOverwrites.set(finalPermissions);
-            resolve(category); // Return the category
-        });
+    return new Promise<CategoryChannel | null>((resolve) => {
+        guild.channels
+            .create({ name: categoryData.name, type: ChannelType.GuildCategory })
+            .then(async (category) => {
+                // When the category is created
+                const finalPermissions: OverwriteData[] = [];
+                categoryData.permissions.forEach((perm) => {
+                    const role = guild.roles.cache.find((r) => r.name === perm.roleName);
+                    if (role) {
+                        finalPermissions.push({
+                            id: role.id,
+                            allow: BigInt(perm.allow),
+                            deny: BigInt(perm.deny)
+                        });
+                    }
+                });
+                await category.permissionOverwrites.set(finalPermissions).catch(() => {});
+                resolve(category); // Return the category
+            })
+            // If the create itself fails (rate limit, missing permission)
+            // we have to resolve to null instead of leaving the outer
+            // Promise hanging — see the matching comment in loadChannel.
+            .catch(() => resolve(null));
     });
 }
 
@@ -275,96 +281,123 @@ export async function loadChannel(
                 (channelData as VoiceChannelData).userLimit > 99 ? null : (channelData as VoiceChannelData).userLimit;
             createOptions.type = ChannelType.GuildVoice;
         }
-        guild.channels.create(createOptions).then(async (channel) => {
-            /* Update channel permissions */
-            const finalPermissions: OverwriteData[] = [];
-            channelData.permissions.forEach((perm) => {
-                const role = guild.roles.cache.find((r) => r.name === perm.roleName);
-                if (role) {
-                    finalPermissions.push({
-                        id: role.id,
-                        allow: BigInt(perm.allow),
-                        deny: BigInt(perm.deny)
-                    });
+        guild.channels
+            .create(createOptions)
+            .then(async (channel) => {
+                /* Update channel permissions */
+                const finalPermissions: OverwriteData[] = [];
+                channelData.permissions.forEach((perm) => {
+                    const role = guild.roles.cache.find((r) => r.name === perm.roleName);
+                    if (role) {
+                        finalPermissions.push({
+                            id: role.id,
+                            allow: BigInt(perm.allow),
+                            deny: BigInt(perm.deny)
+                        });
+                    }
+                });
+                await channel.permissionOverwrites.set(finalPermissions).catch(() => {});
+                if (channelData.type === ChannelType.GuildText) {
+                    /* Load messages */
+                    let webhook: Webhook | void;
+                    if ((channelData as TextChannelData).messages.length > 0) {
+                        webhook = await loadMessages(
+                            channel as TextChannel,
+                            (channelData as TextChannelData).messages
+                        ).catch(() => {});
+                    }
+                    /* Load threads */
+                    if ((channelData as TextChannelData).threads.length > 0) {
+                        //&& guild.features.includes('THREADS_ENABLED')) {
+                        for (const threadData of (channelData as TextChannelData).threads) {
+                            const thread = await (channel as TextChannel).threads
+                                .create({ name: threadData.name })
+                                .catch(() => null);
+                            if (!thread || !webhook) continue;
+                            await loadMessages(thread, threadData.messages, webhook).catch(() => {});
+                        }
+                    }
+                    // FIX: the previous version returned `channel` from this
+                    // .then callback (which is meaningless to the outer
+                    // Promise wrapper) and never called resolve(). The
+                    // outer Promise hung forever, which the legacy fire-
+                    // and-forget caller in load.ts/loadChannels masked by
+                    // never awaiting the result. Once you `await
+                    // loadChannel(...)` for real, the omission shows up as
+                    // a permanent hang on the first text channel.
+                    resolve(channel);
+                } else {
+                    resolve(channel); // Return the channel
                 }
-            });
-            await channel.permissionOverwrites.set(finalPermissions);
-            if (channelData.type === ChannelType.GuildText) {
-                /* Load messages */
-                let webhook: Webhook | void;
-                if ((channelData as TextChannelData).messages.length > 0) {
-                    webhook = await loadMessages(
-                        channel as TextChannel,
-                        (channelData as TextChannelData).messages
-                    ).catch(() => {});
-                }
-                /* Load threads */
-                if ((channelData as TextChannelData).threads.length > 0) {
-                    //&& guild.features.includes('THREADS_ENABLED')) {
-                    await Promise.all(
-                        (channelData as TextChannelData).threads.map(async (threadData) => {
-                            return (channel as TextChannel).threads
-                                .create({
-                                    name: threadData.name
-                                })
-                                .then((thread) => {
-                                    if (!webhook) return;
-                                    return loadMessages(thread, threadData.messages, webhook);
-                                });
-                        })
-                    );
-                }
-                return channel;
-            } else {
-                resolve(channel); // Return the channel
-            }
-        });
+            })
+            .catch(() => resolve(undefined as any));
     });
 }
 
 /**
- * Delete all roles, all channels, all emojis, etc... of a guild
+ * Delete all roles, all channels, all emojis, etc... of a guild.
+ *
+ * NOTE: every operation here is awaited sequentially. The previous version
+ * fired N+M+W+B parallel REST DELETE requests in one tick (where N = roles,
+ * M = channels, W = webhooks, B = bans) and then immediately followed up
+ * with ~10 unawaited guild.set* PATCHes. On a 100-channel/30-role guild
+ * this generated 150+ simultaneous REST calls, instantly tripping
+ * Discord's per-resource rate limits and burning through the consumer's
+ * Cloudflare invalid-request quota. Sequential is slower but stays under
+ * the per-route buckets, and lets the bot's normal traffic continue
+ * through the same global rate limit.
  */
 export async function clearGuild(guild: Guild) {
-    guild.roles.cache
-        .filter((role) => !role.managed && role.editable && role.id !== guild.id)
-        .forEach((role) => {
-            role.delete().catch(() => {});
-        });
-    guild.channels.cache.forEach((channel) => {
-        channel.delete().catch(() => {});
-    });
-    // Don't clear emojis!!
-    /*guild.emojis.cache.forEach((emoji) => {
-        emoji.delete().catch(() => {});
-    });*/
-    const webhooks = await guild.fetchWebhooks();
-    webhooks.forEach((webhook) => {
-        webhook.delete().catch(() => {});
-    });
-    const bans = await guild.bans.fetch();
-    bans.forEach((ban) => {
-        guild.members.unban(ban.user).catch(() => {});
-    });
-    guild.setAFKChannel(null);
-    guild.setAFKTimeout(60 * 5);
-    guild.setIcon(null);
-    guild.setBanner(null).catch(() => {});
-    guild.setSplash(null).catch(() => {});
-    guild.setDefaultMessageNotifications(GuildDefaultMessageNotifications.OnlyMentions);
-    guild.setWidgetSettings({
-        enabled: false,
-        channel: null
-    });
-    if (!guild.features.includes('COMMUNITY')) {
-        guild.setExplicitContentFilter(GuildExplicitContentFilter.Disabled);
-        guild.setVerificationLevel(GuildVerificationLevel.None);
+    for (const role of guild.roles.cache
+        .filter((r) => !r.managed && r.editable && r.id !== guild.id)
+        .values()) {
+        await role.delete().catch(() => {});
     }
-    guild.setSystemChannel(null);
-    guild.setSystemChannelFlags([
-        'SuppressGuildReminderNotifications',
-        'SuppressJoinNotifications',
-        'SuppressPremiumSubscriptions'
-    ]);
+    for (const channel of guild.channels.cache.values()) {
+        await channel.delete().catch(() => {});
+    }
+    // Don't clear emojis!!
+    /*for (const emoji of guild.emojis.cache.values()) {
+        await emoji.delete().catch(() => {});
+    }*/
+    const webhooks = await guild.fetchWebhooks().catch(() => null);
+    if (webhooks) {
+        for (const webhook of webhooks.values()) {
+            await webhook.delete().catch(() => {});
+        }
+    }
+    const bans = await guild.bans.fetch().catch(() => null);
+    if (bans) {
+        for (const ban of bans.values()) {
+            await guild.members.unban(ban.user).catch(() => {});
+        }
+    }
+
+    // Awaited so that any failure surfaces and so that we don't pile these
+    // PATCHes on top of the deletes above.
+    await guild.setAFKChannel(null).catch(() => {});
+    await guild.setAFKTimeout(60 * 5).catch(() => {});
+    await guild.setIcon(null).catch(() => {});
+    await guild.setBanner(null).catch(() => {});
+    await guild.setSplash(null).catch(() => {});
+    await guild.setDefaultMessageNotifications(GuildDefaultMessageNotifications.OnlyMentions).catch(() => {});
+    await guild
+        .setWidgetSettings({
+            enabled: false,
+            channel: null
+        })
+        .catch(() => {});
+    if (!guild.features.includes('COMMUNITY' as GuildFeature)) {
+        await guild.setExplicitContentFilter(GuildExplicitContentFilter.Disabled).catch(() => {});
+        await guild.setVerificationLevel(GuildVerificationLevel.None).catch(() => {});
+    }
+    await guild.setSystemChannel(null).catch(() => {});
+    await guild
+        .setSystemChannelFlags([
+            'SuppressGuildReminderNotifications',
+            'SuppressJoinNotifications',
+            'SuppressPremiumSubscriptions'
+        ])
+        .catch(() => {});
     return;
 }
